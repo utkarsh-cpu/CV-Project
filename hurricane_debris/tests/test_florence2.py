@@ -6,8 +6,9 @@ These are fast tests that do NOT load the actual model.
 import numpy as np
 import pytest
 import torch
+from contextlib import contextmanager
 
-from hurricane_debris.models.florence2 import _bbox_coco_to_florence
+from hurricane_debris.models.florence2 import Florence2Trainer, _bbox_coco_to_florence
 
 
 class TestFlorence2Labels:
@@ -40,3 +41,52 @@ class TestFlorence2Labels:
         result = _bbox_coco_to_florence([10, 20, 30, 40], img_w=100, img_h=100)
         tokens = result.split("><")
         assert len(tokens) == 4  # 4 loc tokens
+
+    def test_collate_uses_detection_targets_for_labels(self):
+        class DummyBatch(dict):
+            def to(self, _device):
+                return self
+
+        class DummyTokenizer:
+            pad_token_id = 0
+
+            def __call__(self, texts, return_tensors=None, padding=True, truncation=True, max_length=256):
+                # One tokenized target sequence per text.
+                rows = []
+                for i, _ in enumerate(texts):
+                    rows.append([5 + i, 9, 0])
+                return {"input_ids": torch.tensor(rows, dtype=torch.long)}
+
+        class DummyProcessor:
+            def __init__(self):
+                self.tokenizer = DummyTokenizer()
+
+            @contextmanager
+            def as_target_processor(self):
+                yield self
+
+            def __call__(self, text, images, return_tensors=None, padding=True):
+                # Prompt token ids intentionally different from target token ids.
+                return DummyBatch(
+                    {
+                        "input_ids": torch.tensor([[1, 2, 0]], dtype=torch.long),
+                        "pixel_values": torch.zeros((1, 3, 8, 8), dtype=torch.float32),
+                    }
+                )
+
+        trainer = Florence2Trainer.__new__(Florence2Trainer)
+        trainer.device = "cpu"
+        trainer.cfg = type("Cfg", (), {"max_new_tokens": 32})()
+        trainer.processor = DummyProcessor()
+
+        sample = {
+            "pixel_values": torch.zeros((3, 8, 8), dtype=torch.float32),
+            "target": {
+                "bboxes": torch.tensor([[1.0, 1.0, 2.0, 2.0]], dtype=torch.float32),
+                "labels": ["vehicle"],
+            },
+        }
+
+        batch = trainer.collate_fn([sample])
+        assert "labels" in batch
+        assert not torch.equal(batch["labels"], batch["input_ids"])

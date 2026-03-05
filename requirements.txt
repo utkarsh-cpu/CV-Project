@@ -31,6 +31,9 @@ pyyaml>=6.0.1
 # Logging & Experiment Tracking
 tensorboard>=2.15.0
 
+# Deployment
+gradio>=4.44.0
+
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0

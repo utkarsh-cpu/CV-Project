@@ -9,11 +9,13 @@ Designed to work with both the cascaded pipeline outputs and raw
 model predictions during training validation.
 """
 
-from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - optional for lightweight environments
+    torch = None
 
 from hurricane_debris.config import EvalConfig
 from hurricane_debris.utils.logging import get_logger
@@ -46,15 +48,14 @@ class Evaluator:
         )
 
         # ── Detection records for F1 / AP ────────────────────────────────
-        # Each entry: (score, is_tp, category_id)
-        self._det_records: List[Tuple[float, bool, int]] = []
-        self._n_gt: Dict[int, int] = defaultdict(int)  # ground-truth count per class
+        # Each entry stores one image's raw detection/ground-truth arrays.
+        # TP/FP are computed per-threshold during metric computation.
+        self._det_samples: List[Dict[str, np.ndarray]] = []
 
     def reset(self):
         """Clear accumulated statistics."""
         self._confusion[:] = 0
-        self._det_records.clear()
-        self._n_gt.clear()
+        self._det_samples.clear()
 
     # ── Update methods ───────────────────────────────────────────────────
 
@@ -94,45 +95,15 @@ class Evaluator:
 
         Bboxes in [x1, y1, x2, y2] format. Labels as integer class IDs.
         """
-        # Count ground truths
-        for gl in gt_labels:
-            self._n_gt[int(gl)] += 1
-
-        if len(pred_bboxes) == 0:
-            return
-
-        if len(gt_bboxes) == 0:
-            for score, label in zip(pred_scores, pred_labels):
-                self._det_records.append((float(score), False, int(label)))
-            return
-
-        # Compute IoU matrix [N_pred, N_gt]
-        iou_matrix = self._compute_iou_matrix(pred_bboxes, gt_bboxes)
-
-        matched_gt = set()
-        # Sort predictions by descending score
-        order = np.argsort(-pred_scores)
-
-        for idx in order:
-            score = float(pred_scores[idx])
-            cat = int(pred_labels[idx])
-            best_iou = 0.0
-            best_gt = -1
-
-            for gt_idx in range(len(gt_bboxes)):
-                if gt_idx in matched_gt:
-                    continue
-                if int(gt_labels[gt_idx]) != cat:
-                    continue
-                if iou_matrix[idx, gt_idx] > best_iou:
-                    best_iou = iou_matrix[idx, gt_idx]
-                    best_gt = gt_idx
-
-            is_tp = best_iou >= iou_threshold and best_gt >= 0
-            if is_tp:
-                matched_gt.add(best_gt)
-
-            self._det_records.append((score, is_tp, cat))
+        self._det_samples.append(
+            {
+                "pred_bboxes": np.asarray(pred_bboxes, dtype=float).reshape(-1, 4),
+                "pred_scores": np.asarray(pred_scores, dtype=float).reshape(-1),
+                "pred_labels": np.asarray(pred_labels, dtype=int).reshape(-1),
+                "gt_bboxes": np.asarray(gt_bboxes, dtype=float).reshape(-1, 4),
+                "gt_labels": np.asarray(gt_labels, dtype=int).reshape(-1),
+            }
+        )
 
     def update(
         self,
@@ -216,12 +187,14 @@ class Evaluator:
 
     def _compute_f1(self) -> Dict:
         """Compute detection F1, precision, recall."""
-        if not self._det_records:
+        if not self._det_samples:
             return {"f1": 0.0, "precision": 0.0, "recall": 0.0}
 
-        tp = sum(1 for _, is_tp, _ in self._det_records if is_tp)
-        fp = sum(1 for _, is_tp, _ in self._det_records if not is_tp)
-        total_gt = sum(self._n_gt.values())
+        records, total_gt = self._match_detections_at_threshold(
+            self.cfg.f1_threshold
+        )
+        tp = sum(1 for _, is_tp, _ in records if is_tp)
+        fp = sum(1 for _, is_tp, _ in records if not is_tp)
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / total_gt if total_gt > 0 else 0.0
@@ -239,7 +212,7 @@ class Evaluator:
 
     def _compute_ap(self) -> Dict:
         """Compute AP at IoU thresholds [0.5 : 0.05 : 0.95]."""
-        if not self._det_records:
+        if not self._det_samples:
             return {"ap50": 0.0, "ap75": 0.0, "ap_5095": 0.0}
 
         # Re-compute for each threshold
@@ -255,9 +228,8 @@ class Evaluator:
 
     def _ap_at_threshold(self, iou_threshold: float) -> float:
         """Compute AP for a single IoU threshold (11-point interpolation)."""
-        # Sort by score descending
-        records = sorted(self._det_records, key=lambda x: -x[0])
-        total_gt = sum(self._n_gt.values())
+        records, total_gt = self._match_detections_at_threshold(iou_threshold)
+        records = sorted(records, key=lambda x: -x[0])
         if total_gt == 0:
             return 0.0
 
@@ -266,7 +238,7 @@ class Evaluator:
         precisions = []
         recalls = []
 
-        for score, is_tp, cat in records:
+        for _, is_tp, _ in records:
             if is_tp:
                 tp_cumsum += 1
             else:
@@ -284,6 +256,64 @@ class Evaluator:
         ap /= 11.0
 
         return ap
+
+    def _match_detections_at_threshold(
+        self, iou_threshold: float
+    ) -> Tuple[List[Tuple[float, bool, int]], int]:
+        """
+        Recompute detection matches at a specific IoU threshold.
+
+        Returns:
+            records: list[(score, is_tp, category_id)]
+            total_gt: total number of ground-truth instances
+        """
+        records: List[Tuple[float, bool, int]] = []
+        total_gt = 0
+
+        for sample in self._det_samples:
+            pred_bboxes = sample["pred_bboxes"]
+            pred_scores = sample["pred_scores"]
+            pred_labels = sample["pred_labels"]
+            gt_bboxes = sample["gt_bboxes"]
+            gt_labels = sample["gt_labels"]
+
+            total_gt += len(gt_labels)
+
+            if len(pred_bboxes) == 0:
+                continue
+
+            if len(gt_bboxes) == 0:
+                for score, label in zip(pred_scores, pred_labels):
+                    records.append((float(score), False, int(label)))
+                continue
+
+            iou_matrix = self._compute_iou_matrix(pred_bboxes, gt_bboxes)
+            matched_gt = set()
+            order = np.argsort(-pred_scores)
+
+            for pred_idx in order:
+                score = float(pred_scores[pred_idx])
+                label = int(pred_labels[pred_idx])
+
+                best_gt_idx = -1
+                best_iou = 0.0
+                for gt_idx in range(len(gt_bboxes)):
+                    if gt_idx in matched_gt:
+                        continue
+                    if int(gt_labels[gt_idx]) != label:
+                        continue
+
+                    iou = float(iou_matrix[pred_idx, gt_idx])
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_gt_idx = gt_idx
+
+                is_tp = best_gt_idx >= 0 and best_iou >= iou_threshold
+                if is_tp:
+                    matched_gt.add(best_gt_idx)
+                records.append((score, is_tp, label))
+
+        return records, total_gt
 
     # ── Utility ──────────────────────────────────────────────────────────
 
@@ -330,7 +360,7 @@ class Evaluator:
 
 def _to_numpy(x) -> np.ndarray:
     """Convert tensor / list to numpy array."""
-    if isinstance(x, torch.Tensor):
+    if torch is not None and isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy()
     if isinstance(x, np.ndarray):
         return x

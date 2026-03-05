@@ -228,6 +228,7 @@ class DesignSafeDataset(Dataset):
             "pixel_values": image_t,
             "target": target,
             "image_id": img_info["id"],
+            "image_path": str(img_path),
         }
 
     def _blank(self, idx: int) -> Dict:
@@ -242,4 +243,5 @@ class DesignSafeDataset(Dataset):
                 ),
             },
             "image_id": idx,
+            "image_path": "",
         }

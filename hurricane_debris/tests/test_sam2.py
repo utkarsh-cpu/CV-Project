@@ -62,3 +62,34 @@ class TestSAM2Loss:
         # but we can at least check it doesn't crash
         loss_ab = trainer.compute_loss(a, b)
         assert not torch.isnan(loss_ab)
+
+
+def test_setup_fine_tuning_trainable_modules():
+    class DummyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.image_encoder = torch.nn.Sequential(torch.nn.Linear(4, 4))
+            self.sam_prompt_encoder = torch.nn.Sequential(torch.nn.Linear(4, 4))
+            self.sam_mask_decoder = torch.nn.Sequential(torch.nn.Linear(4, 4))
+
+    t = SAM2Trainer.__new__(SAM2Trainer)
+    t.cfg = type(
+        "Cfg",
+        (),
+        {
+            "freeze_image_encoder": True,
+            "train_prompt_encoder": True,
+            "train_mask_decoder": True,
+        },
+    )()
+    t.model = DummyModel()
+
+    # Start with all params trainable to verify freeze/unfreeze behavior.
+    for p in t.model.parameters():
+        p.requires_grad = True
+
+    t.setup_fine_tuning()
+
+    assert all(not p.requires_grad for p in t.model.image_encoder.parameters())
+    assert all(p.requires_grad for p in t.model.sam_prompt_encoder.parameters())
+    assert all(p.requires_grad for p in t.model.sam_mask_decoder.parameters())

@@ -224,6 +224,7 @@ class MSNetDataset(Dataset):
             "pixel_values": image_t,
             "target": target,
             "image_id": img_info["id"],
+            "image_path": str(img_path),
         }
 
     # ── Helpers ──────────────────────────────────────────────────────────
@@ -282,4 +283,5 @@ class MSNetDataset(Dataset):
                 "masks": torch.zeros((0, self.image_size, self.image_size)),
             },
             "image_id": idx,
+            "image_path": "",
         }

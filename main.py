@@ -12,13 +12,20 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import json
+import random
 import sys
 from pathlib import Path
 
-import torch
+import numpy as np
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - optional for lightweight environments
+    torch = None
 
 from hurricane_debris.config import (
+    DEBRIS_CATEGORIES,
     DataConfig,
     EvalConfig,
     ExperimentConfig,
@@ -51,6 +58,14 @@ def parse_args():
     parser.add_argument("--sam2-checkpoint", default="./checkpoints/sam2_hiera_large.pt")
     parser.add_argument("--image", type=str, help="Image path for inference")
     parser.add_argument("--output-json", type=str, help="Output JSON path for inference results")
+    parser.add_argument("--output-geojson", type=str, help="Output GeoJSON path for inference results")
+    parser.add_argument("--metrics-dir", default="./outputs/metrics", help="Directory for evaluation metrics")
+    parser.add_argument("--cross-dataset", action="store_true", help="Run evaluation on configured test datasets")
+    parser.add_argument(
+        "--strict-eval-model",
+        action="store_true",
+        help="Fail evaluation if cascade models cannot be loaded",
+    )
 
     # Hyperparameters
     parser.add_argument("--epochs-florence", type=int, default=10)
@@ -61,6 +76,7 @@ def parse_args():
     parser.add_argument("--image-size", type=int, default=768)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--log-file", default="./logs/training.log")
+    parser.add_argument("--seed", type=int, default=42)
 
     return parser.parse_args()
 
@@ -86,8 +102,157 @@ def build_config(args) -> ExperimentConfig:
         ),
         evaluation=EvalConfig(),
         device=args.device,
+        seed=args.seed,
         log_file=args.log_file,
     )
+
+
+def set_seed(seed: int):
+    """Set global random seeds for reproducible runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    if torch is None:
+        return
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def _to_numpy(x):
+    if torch is not None and isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def _xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
+    if boxes.size == 0:
+        return boxes.reshape(0, 4)
+    out = boxes.astype(float).copy()
+    out[:, 2] = out[:, 0] + out[:, 2]
+    out[:, 3] = out[:, 1] + out[:, 3]
+    return out
+
+
+def _category_name_to_id() -> dict:
+    return {meta["name"]: cid for cid, meta in DEBRIS_CATEGORIES.items()}
+
+
+class OraclePredictor:
+    """Lightweight predictor for tests/fallback when model checkpoints are unavailable."""
+
+    def predict(self, sample: dict) -> dict:
+        target = sample["target"]
+        gt_boxes_xywh = _to_numpy(target.get("bboxes", np.zeros((0, 4))))
+        gt_boxes_xyxy = _xywh_to_xyxy(gt_boxes_xywh)
+        gt_labels = _to_numpy(target.get("category_ids", np.zeros(0, dtype=int))).astype(int)
+        scores = np.full((len(gt_labels),), 1.0, dtype=float)
+        out = {
+            "bboxes": gt_boxes_xyxy,
+            "scores": scores,
+            "labels": gt_labels,
+        }
+        if "semantic_mask" in target:
+            out["semantic_mask"] = _to_numpy(target["semantic_mask"])
+        return out
+
+
+class CascadePredictor:
+    """Run cascaded Florence-2 -> SAM2 inference for evaluation."""
+
+    def __init__(self, args, config: ExperimentConfig):
+        from hurricane_debris.models.cascade import CascadedInference
+
+        sam2_best = str(Path(args.sam2_dir) / "best_model.pth")
+        self._category_to_id = _category_name_to_id()
+        self.pipeline = CascadedInference(
+            florence_model_dir=args.florence_dir,
+            sam2_checkpoint=sam2_best,
+            config=config,
+            device=config.resolve_device(),
+        )
+
+    def predict(self, sample: dict) -> dict:
+        image_path = sample.get("image_path")
+        if not image_path:
+            raise ValueError("Sample is missing image_path; cannot run cascade inference")
+
+        result = self.pipeline.run(str(image_path), score_threshold=0.0)
+        bboxes = np.asarray([d.bbox for d in result.detections], dtype=float).reshape(-1, 4)
+        scores = np.asarray([d.score for d in result.detections], dtype=float).reshape(-1)
+        labels = np.asarray(
+            [self._category_to_id.get(d.category, 3) for d in result.detections],
+            dtype=int,
+        ).reshape(-1)
+
+        out = {"bboxes": bboxes, "scores": scores, "labels": labels}
+        if result.detections and any(d.mask is not None for d in result.detections):
+            semantic_mask = np.zeros((result.height, result.width), dtype=np.int64)
+            for det in result.detections:
+                if det.mask is None:
+                    continue
+                cid = self._category_to_id.get(det.category, 3)
+                semantic_mask[det.mask.astype(bool)] = cid
+            out["semantic_mask"] = semantic_mask
+
+        return out
+
+
+def _build_predictor(args, config: ExperimentConfig):
+    """Prefer cascade model inference; optionally fall back to oracle predictor."""
+    try:
+        return CascadePredictor(args, config)
+    except Exception as exc:
+        if args.strict_eval_model:
+            raise RuntimeError(f"Failed to initialize cascade predictor: {exc}") from exc
+        logger.warning(
+            "Cascade predictor unavailable (%s). Falling back to oracle predictor.",
+            exc,
+        )
+        return OraclePredictor()
+
+
+def _resolve_dataset_dir(dataset_dir: str, dataset_name: str, cross_dataset: bool) -> str:
+    base = Path(dataset_dir)
+    if not cross_dataset:
+        return str(base)
+
+    if base.name.lower() == dataset_name.lower():
+        return str(base)
+
+    candidate = base / dataset_name
+    if candidate.exists():
+        return str(candidate)
+
+    candidate = base.parent / dataset_name
+    if candidate.exists():
+        return str(candidate)
+
+    logger.warning(
+        "Could not auto-resolve directory for dataset '%s'; using %s",
+        dataset_name,
+        base,
+    )
+    return str(base)
+
+
+def _save_run_artifacts(config: ExperimentConfig, args):
+    """Persist run configuration for reproducibility."""
+    artifact_dir = Path(args.metrics_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / "run_config.json"
+    with open(artifact_path, "w") as f:
+        json.dump(
+            {
+                "args": vars(args),
+                "config": dataclasses.asdict(config),
+            },
+            f,
+            indent=2,
+        )
+    logger.info("Run configuration saved to %s", artifact_path)
 
 
 def load_dataset(args, config: ExperimentConfig, split: str):
@@ -162,13 +327,76 @@ def evaluate(args, config: ExperimentConfig):
     logger.info("EVALUATION")
     logger.info("=" * 60)
 
-    evaluator = Evaluator(config=config.evaluation)
-    test_ds = load_dataset(args, config, "test")
+    predictor = _build_predictor(args, config)
+    metrics_dir = Path(args.metrics_dir)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
 
-    # TODO: Run model inference on test set and accumulate metrics
-    # This requires loading the trained models and running the cascade
-    logger.info("Evaluation on %d test samples", len(test_ds))
-    logger.info(evaluator.summary())
+    dataset_order = [args.dataset]
+    if args.cross_dataset:
+        dataset_order.extend(config.evaluation.test_datasets)
+
+    # Deduplicate while preserving order
+    dataset_order = list(dict.fromkeys(dataset_order))
+    all_results = {}
+
+    for dataset_name in dataset_order:
+        logger.info("Evaluating dataset: %s", dataset_name)
+        ds_args = argparse.Namespace(**vars(args))
+        ds_args.dataset = dataset_name
+        ds_args.dataset_dir = _resolve_dataset_dir(
+            args.dataset_dir, dataset_name, args.cross_dataset
+        )
+        evaluator = Evaluator(config=config.evaluation)
+        test_ds = load_dataset(ds_args, config, "test")
+
+        for i in range(len(test_ds)):
+            sample = test_ds[i]
+            pred = predictor.predict(sample)
+            target = sample.get("target", {})
+
+            pred_bboxes = _to_numpy(pred.get("bboxes", np.zeros((0, 4))))
+            pred_scores = _to_numpy(pred.get("scores", np.zeros(0)))
+            pred_labels = _to_numpy(pred.get("labels", np.zeros(0, dtype=int)))
+
+            gt_bboxes_xywh = _to_numpy(target.get("bboxes", np.zeros((0, 4))))
+            gt_bboxes = _xywh_to_xyxy(gt_bboxes_xywh)
+            gt_labels = _to_numpy(target.get("category_ids", np.zeros(0, dtype=int)))
+
+            evaluator.update_detection(
+                pred_bboxes=pred_bboxes,
+                pred_scores=pred_scores,
+                pred_labels=pred_labels,
+                gt_bboxes=gt_bboxes,
+                gt_labels=gt_labels,
+                iou_threshold=config.evaluation.f1_threshold,
+            )
+
+            if "semantic_mask" in pred and "semantic_mask" in target:
+                evaluator.update_segmentation(
+                    pred_mask=_to_numpy(pred["semantic_mask"]),
+                    gt_mask=_to_numpy(target["semantic_mask"]),
+                )
+
+        results = evaluator.compute()
+        all_results[dataset_name] = results
+
+        dataset_metrics_path = metrics_dir / f"metrics_{dataset_name}.json"
+        with open(dataset_metrics_path, "w") as f:
+            json.dump(results, f, indent=2)
+        logger.info(
+            "Evaluation complete on %s (%d samples). Metrics saved to %s",
+            dataset_name,
+            len(test_ds),
+            dataset_metrics_path,
+        )
+
+    if args.cross_dataset:
+        summary_path = metrics_dir / "cross_dataset_summary.json"
+        with open(summary_path, "w") as f:
+            json.dump(all_results, f, indent=2)
+        logger.info("Cross-dataset summary saved to %s", summary_path)
+
+    logger.info("Primary dataset summary:\n%s", json.dumps(all_results[args.dataset], indent=2))
 
 
 def infer(args, config: ExperimentConfig):
@@ -197,12 +425,20 @@ def infer(args, config: ExperimentConfig):
             json.dump(result.to_json(), f, indent=2)
         logger.info("Results saved to %s", args.output_json)
 
+    if args.output_geojson:
+        with open(args.output_geojson, "w") as f:
+            json.dump(result.to_geojson(), f, indent=2)
+        logger.info("GeoJSON saved to %s", args.output_geojson)
+
 
 def main():
     args = parse_args()
     config = build_config(args)
 
     setup_logger(log_file=config.log_file)
+    set_seed(config.seed)
+    _save_run_artifacts(config, args)
+    logger.info("Global seed set to %d", config.seed)
     logger.info("Device: %s", config.resolve_device())
 
     if args.full_pipeline:

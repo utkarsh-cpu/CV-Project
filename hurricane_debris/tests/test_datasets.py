@@ -15,6 +15,9 @@ import torch
 
 from hurricane_debris.config import DataConfig
 from hurricane_debris.data.base_dataset import DebrisDataset
+from hurricane_debris.data.designsafe import DesignSafeDataset
+from hurricane_debris.data.msnet import MSNetDataset
+from hurricane_debris.data.rescuenet import RescueNetDataset
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
@@ -158,3 +161,72 @@ class TestDebrisDataset:
             dummy_dataset_dir, split="val", image_ids=[0, 2]
         )
         assert len(ds) == 2
+
+
+class TestDatasetSpecificSmoke:
+
+    def test_rescuenet_loader_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            img_dir = root / "test" / "test-org-img"
+            mask_dir = root / "test" / "test-label-img"
+            img_dir.mkdir(parents=True)
+            mask_dir.mkdir(parents=True)
+
+            img = np.zeros((64, 64, 3), dtype=np.uint8)
+            mask = np.zeros((64, 64), dtype=np.uint8)
+            mask[16:48, 16:48] = 3
+
+            cv2.imwrite(str(img_dir / "sample.png"), img)
+            cv2.imwrite(str(mask_dir / "sample.png"), mask)
+
+            ds = RescueNetDataset(root_dir=str(root), split="test", config=DataConfig(image_size=64))
+            assert len(ds) == 1
+            sample = ds[0]
+            assert "image_path" in sample
+            assert sample["target"]["bboxes"].shape[1] == 4
+
+    def test_designsafe_loader_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "images").mkdir(parents=True)
+            (root / "annotations").mkdir(parents=True)
+
+            img = np.zeros((64, 64, 3), dtype=np.uint8)
+            cv2.imwrite(str(root / "images" / "sample.png"), img)
+
+            coco = {
+                "images": [{"id": 1, "file_name": "sample.png", "height": 64, "width": 64}],
+                "annotations": [{"id": 1, "image_id": 1, "category_id": 3, "bbox": [10, 10, 20, 20]}],
+            }
+            with open(root / "annotations" / "damage_observations.json", "w") as f:
+                json.dump(coco, f)
+
+            ds = DesignSafeDataset(root_dir=str(root), split="test", config=DataConfig(image_size=64))
+            assert len(ds) == 1
+            sample = ds[0]
+            assert "image_path" in sample
+            assert sample["target"]["bboxes"].shape[1] == 4
+
+    def test_msnet_loader_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "images").mkdir(parents=True)
+            (root / "annotations").mkdir(parents=True)
+
+            img = np.zeros((64, 64, 3), dtype=np.uint8)
+            cv2.imwrite(str(root / "images" / "sample.png"), img)
+
+            coco = {
+                "images": [{"id": 1, "file_name": "sample.png", "height": 64, "width": 64}],
+                "annotations": [{"id": 1, "image_id": 1, "category_id": 2, "bbox": [10, 10, 20, 20]}],
+                "categories": [{"id": 2, "name": "major-damage"}],
+            }
+            with open(root / "annotations" / "instances_test.json", "w") as f:
+                json.dump(coco, f)
+
+            ds = MSNetDataset(root_dir=str(root), split="test", config=DataConfig(image_size=64))
+            assert len(ds) == 1
+            sample = ds[0]
+            assert "image_path" in sample
+            assert sample["target"]["bboxes"].shape[1] == 4

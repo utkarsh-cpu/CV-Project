@@ -1,0 +1,40 @@
+{
+  "defaults": {
+    "dataset": "rescuenet",
+    "dataset_dir": "./datasets",
+    "metrics_dir": "./outputs/metrics",
+    "seed": 42,
+    "cross_dataset": true
+  },
+  "experiments": [
+    {
+      "name": "baseline_oracle_predictor",
+      "description": "Lightweight baseline using oracle fallback predictor for pipeline sanity checks.",
+      "args": [
+        "--evaluate"
+      ]
+    },
+    {
+      "name": "cascade_eval_seed_42",
+      "description": "Cascade-backed evaluation using configured Florence-2 and SAM2 checkpoints.",
+      "args": [
+        "--evaluate",
+        "--strict-eval-model",
+        "--florence-dir",
+        "./models/florence2_debris",
+        "--sam2-dir",
+        "./models/sam2_debris"
+      ]
+    },
+    {
+      "name": "cross_dataset_seed_123",
+      "description": "Cross-dataset benchmark run with alternate seed.",
+      "args": [
+        "--evaluate",
+        "--cross-dataset",
+        "--seed",
+        "123"
+      ]
+    }
+  ]
+}

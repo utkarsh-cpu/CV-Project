@@ -13,7 +13,8 @@ class TestEvaluator:
 
     @pytest.fixture
     def evaluator(self):
-        return Evaluator(config=EvalConfig(num_classes=3))
+        # Masks in these tests use classes {0,1,2} so we configure 2 foreground classes.
+        return Evaluator(config=EvalConfig(num_classes=2))
 
     # ── mIoU tests ────────────────────────────────────────────────────────
 
@@ -90,3 +91,27 @@ class TestEvaluator:
         assert "mIoU" in summary
         assert "F1" in summary
         assert "AP@50" in summary
+
+    def test_ap_decreases_with_stricter_threshold(self):
+        cfg = EvalConfig(num_classes=3, iou_thresholds=(0.5, 0.75))
+        ev = Evaluator(config=cfg)
+
+        # One GT, one prediction with IoU around 0.56.
+        gt_boxes = np.array([[10, 10, 50, 50]], dtype=float)
+        gt_labels = np.array([1])
+        pred_boxes = np.array([[10, 10, 40, 40]], dtype=float)
+        pred_scores = np.array([0.95])
+        pred_labels = np.array([1])
+
+        ev.update_detection(
+            pred_boxes,
+            pred_scores,
+            pred_labels,
+            gt_boxes,
+            gt_labels,
+            iou_threshold=0.5,
+        )
+
+        ap50 = ev._ap_at_threshold(0.5)
+        ap75 = ev._ap_at_threshold(0.75)
+        assert ap50 >= ap75

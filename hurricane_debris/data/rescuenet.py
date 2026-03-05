@@ -235,6 +235,7 @@ class RescueNetDataset(Dataset):
             "pixel_values": image_t,
             "target": target,
             "image_id": idx,
+            "image_path": str(img_path),
         }
 
     # ── Helpers ──────────────────────────────────────────────────────────
@@ -293,4 +294,5 @@ class RescueNetDataset(Dataset):
                 ),
             },
             "image_id": idx,
+            "image_path": "",
         }

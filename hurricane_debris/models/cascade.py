@@ -13,7 +13,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-import torch
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - optional for lightweight environments
+    class _TorchStub:
+        @staticmethod
+        def no_grad():
+            def _decorator(fn):
+                return fn
+
+            return _decorator
+
+    torch = _TorchStub()
 from PIL import Image
 
 from hurricane_debris.config import DEBRIS_CATEGORIES, ExperimentConfig
@@ -57,6 +68,41 @@ class InferenceResult:
                 }
                 for d in self.detections
             ],
+        }
+
+    def to_geojson(self) -> Dict:
+        """Export detections as pixel-coordinate GeoJSON polygons."""
+        features = []
+        for i, det in enumerate(self.detections):
+            x1, y1, x2, y2 = [float(v) for v in det.bbox]
+            polygon = [
+                [x1, y1],
+                [x2, y1],
+                [x2, y2],
+                [x1, y2],
+                [x1, y1],
+            ]
+            features.append(
+                {
+                    "type": "Feature",
+                    "id": i,
+                    "geometry": {"type": "Polygon", "coordinates": [polygon]},
+                    "properties": {
+                        "category": det.category,
+                        "score": round(det.score, 4),
+                        "priority": det.priority,
+                        "bbox_xyxy": [x1, y1, x2, y2],
+                        "coordinate_system": "image_pixel",
+                    },
+                }
+            )
+
+        return {
+            "type": "FeatureCollection",
+            "coordinate_system": "image_pixel",
+            "image": self.image_path,
+            "image_size": {"width": self.width, "height": self.height},
+            "features": features,
         }
 
 
@@ -291,7 +337,14 @@ class CascadedInference:
 
         # Sort by priority
         priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        detections.sort(key=lambda d: priority_order.get(d.priority, 9))
+        detections.sort(
+            key=lambda d: (
+                priority_order.get(d.priority, 9),
+                -float(d.score),
+                d.category,
+                tuple(float(v) for v in d.bbox),
+            )
+        )
 
         result = InferenceResult(
             image_path=str(image_path),
