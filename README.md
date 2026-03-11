@@ -10,6 +10,35 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+## Download Datasets
+
+Before training, download the required datasets.  A built-in pipeline handles
+download, extraction, and directory-layout validation:
+
+```bash
+# Download RescueNet (primary training/evaluation dataset)
+python main.py --download --dataset rescuenet --dataset-dir ./datasets
+
+# Download MSNet (cross-dataset evaluation)
+python main.py --download --dataset msnet --dataset-dir ./datasets
+
+# Download DesignSafe-CI (cross-dataset evaluation — requires free account)
+python main.py --download --dataset designsafe --dataset-dir ./datasets
+
+# Download all datasets in one go
+python main.py --download --dataset all --dataset-dir ./datasets
+
+# Force re-download even if the data already exists
+python main.py --download --dataset rescuenet --dataset-dir ./datasets --force-download
+
+# Keep the downloaded archive after extraction
+python main.py --download --dataset rescuenet --dataset-dir ./datasets --keep-archive
+```
+
+> **Note:** Some datasets (MSNet, DesignSafe-CI) require registration or manual
+> access-request steps.  When automatic download is unavailable the pipeline
+> prints step-by-step instructions for obtaining the data manually.
+
 ## Run
 
 Examples:
