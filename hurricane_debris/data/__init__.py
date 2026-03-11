@@ -4,6 +4,7 @@ from hurricane_debris.data.designsafe import DesignSafeDataset
 from hurricane_debris.data.msnet import MSNetDataset
 from hurricane_debris.data.transforms import get_train_transforms, get_val_transforms
 from hurricane_debris.data.splits import create_splits
+from hurricane_debris.data.download import download_dataset, verify_dataset, DATASET_REGISTRY
 
 __all__ = [
     "DebrisDataset",
@@ -13,4 +14,7 @@ __all__ = [
     "get_train_transforms",
     "get_val_transforms",
     "create_splits",
+    "download_dataset",
+    "verify_dataset",
+    "DATASET_REGISTRY",
 ]

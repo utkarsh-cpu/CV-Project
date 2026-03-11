@@ -9,6 +9,8 @@ Usage:
     python main.py --train-sam2
     python main.py --evaluate
     python main.py --infer --image path/to/image.jpg
+    python main.py --download --dataset rescuenet --dataset-dir ./datasets
+    python main.py --download --dataset all       --dataset-dir ./datasets
 """
 
 import argparse
@@ -49,10 +51,16 @@ def parse_args():
     mode.add_argument("--train-sam2", action="store_true", help="Train SAM2 only")
     mode.add_argument("--evaluate", action="store_true", help="Evaluate models")
     mode.add_argument("--infer", action="store_true", help="Run cascaded inference")
+    mode.add_argument("--download", action="store_true", help="Download dataset(s) to --dataset-dir")
 
     # Paths
     parser.add_argument("--dataset-dir", default="./datasets/rescuenet", help="Dataset root")
-    parser.add_argument("--dataset", default="rescuenet", choices=["rescuenet", "msnet", "designsafe", "coco"])
+    parser.add_argument(
+        "--dataset",
+        default="rescuenet",
+        choices=["rescuenet", "msnet", "designsafe", "coco", "all"],
+        help="Dataset name; 'all' downloads every registered dataset",
+    )
     parser.add_argument("--florence-dir", default="./models/florence2_debris")
     parser.add_argument("--sam2-dir", default="./models/sam2_debris")
     parser.add_argument("--sam2-checkpoint", default="./checkpoints/sam2_hiera_large.pt")
@@ -77,6 +85,18 @@ def parse_args():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--log-file", default="./logs/training.log")
     parser.add_argument("--seed", type=int, default=42)
+
+    # Download options
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Re-download dataset even if it already exists",
+    )
+    parser.add_argument(
+        "--keep-archive",
+        action="store_true",
+        help="Keep the downloaded archive after extraction",
+    )
 
     return parser.parse_args()
 
@@ -290,6 +310,40 @@ def load_dataset(args, config: ExperimentConfig, split: str):
         )
 
 
+def download(args):
+    """Download one or all datasets to the configured destination directory."""
+    from hurricane_debris.data.download import download_dataset
+
+    # For 'all', use the parent datasets directory; otherwise use dataset_dir
+    dataset_name = args.dataset
+    if dataset_name == "all":
+        dest_dir = args.dataset_dir
+    else:
+        # If dataset_dir already ends with the dataset name, use its parent
+        dest_path = Path(args.dataset_dir)
+        if dest_path.name.lower() == dataset_name.lower():
+            dest_dir = str(dest_path.parent)
+        else:
+            dest_dir = args.dataset_dir
+
+    logger.info("=" * 60)
+    logger.info("DOWNLOADING DATASET(S): %s", dataset_name.upper())
+    logger.info("Destination: %s", dest_dir)
+    logger.info("=" * 60)
+
+    try:
+        result_path = download_dataset(
+            name=dataset_name,
+            dest_dir=dest_dir,
+            force=args.force_download,
+            keep_archive=args.keep_archive,
+        )
+        logger.info("Download complete. Data available at: %s", result_path)
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+
+
 def train_florence(args, config: ExperimentConfig):
     from hurricane_debris.models.florence2 import Florence2Trainer
 
@@ -433,6 +487,13 @@ def infer(args, config: ExperimentConfig):
 
 def main():
     args = parse_args()
+
+    # --download runs without a full ExperimentConfig / artifact saving
+    if args.download:
+        setup_logger()
+        download(args)
+        return
+
     config = build_config(args)
 
     setup_logger(log_file=config.log_file)
@@ -459,6 +520,8 @@ Hurricane Debris Detection — Training & Inference
 ==================================================
 
 Usage:
+  python main.py --download --dataset rescuenet      # Download RescueNet
+  python main.py --download --dataset all            # Download all datasets
   python main.py --full-pipeline                     # Full training + evaluation
   python main.py --train-florence --dataset rescuenet # Train Florence-2
   python main.py --train-sam2 --dataset rescuenet     # Train SAM2
@@ -467,11 +530,13 @@ Usage:
 
 Options:
   --dataset-dir PATH       Dataset root (default: ./datasets/rescuenet)
-  --dataset NAME           rescuenet | msnet | designsafe | coco
+  --dataset NAME           rescuenet | msnet | designsafe | coco | all
   --epochs-florence N      Florence-2 epochs (default: 10)
   --epochs-sam2 N          SAM2 epochs (default: 20)
   --image-size N           Input resolution (default: 768)
   --device DEVICE          auto | cuda | cpu | mps
+  --force-download         Re-download even if data already exists
+  --keep-archive           Keep the downloaded archive after extraction
         """)
 
 
