@@ -228,6 +228,7 @@ class Florence2Trainer:
             dataloader_pin_memory=True,
             dataloader_prefetch_factor=2,
             gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
             torch_compile=True,
             report_to="tensorboard",
             metric_for_best_model="eval_loss" if val_dataset else None,
