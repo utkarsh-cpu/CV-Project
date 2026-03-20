@@ -217,13 +217,14 @@ class Florence2Trainer:
             warmup_ratio=self.cfg.warmup_ratio,
             logging_steps=10,
             save_strategy="epoch",
-            evaluation_strategy="epoch" if val_dataset else "no",
+            eval_strategy="epoch" if val_dataset else "no",
             save_total_limit=3,
             load_best_model_at_end=val_dataset is not None,
             fp16=torch.cuda.is_available(),
             gradient_accumulation_steps=self.cfg.gradient_accumulation_steps,
             report_to="tensorboard",
             metric_for_best_model="eval_loss" if val_dataset else None,
+            remove_unused_columns=False,
         )
 
         callbacks = []

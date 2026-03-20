@@ -134,3 +134,75 @@ class TestFlorence2Labels:
         batch = trainer.collate_fn([sample])
         assert "labels" in batch
         assert not torch.equal(batch["labels"], batch["input_ids"])
+
+    def test_train_keeps_target_column_for_custom_collator(self, monkeypatch, tmp_path):
+        captured = {}
+
+        class DummyModel:
+            def save_pretrained(self, output_dir):
+                captured["saved_model_dir"] = output_dir
+
+        class DummyProcessor:
+            def save_pretrained(self, output_dir):
+                captured["saved_processor_dir"] = output_dir
+
+        class DummyTrainer:
+            def __init__(
+                self,
+                model,
+                args,
+                train_dataset,
+                eval_dataset,
+                data_collator,
+                callbacks,
+            ):
+                captured["remove_unused_columns"] = args.remove_unused_columns
+                captured["eval_strategy"] = args.eval_strategy
+                sample = data_collator([train_dataset[0]])
+                captured["collated_keys"] = set(sample.keys())
+
+            def train(self):
+                captured["train_called"] = True
+
+        monkeypatch.setattr(florence2_module, "Trainer", DummyTrainer)
+
+        trainer = Florence2Trainer.__new__(Florence2Trainer)
+        trainer.device = "cpu"
+        trainer.cfg = type(
+            "Cfg",
+            (),
+            {
+                "num_epochs": 1,
+                "learning_rate": 1e-4,
+                "weight_decay": 0.01,
+                "warmup_ratio": 0.1,
+                "gradient_accumulation_steps": 1,
+                "early_stopping_patience": 1,
+                "output_dir": str(tmp_path / "florence-out"),
+                "max_new_tokens": 32,
+            },
+        )()
+        trainer.model = DummyModel()
+        trainer.processor = DummyProcessor()
+
+        def fake_collate(examples):
+            assert "target" in examples[0]
+            return {"labels": torch.tensor([[1]]), "input_ids": torch.tensor([[2]])}
+
+        trainer.collate_fn = fake_collate
+
+        sample = {
+            "pixel_values": torch.zeros((3, 8, 8), dtype=torch.float32),
+            "target": {
+                "bboxes": torch.tensor([[1.0, 1.0, 2.0, 2.0]], dtype=torch.float32),
+                "labels": ["vehicle"],
+            },
+        }
+
+        trainer.train([sample], [sample], output_dir=str(tmp_path / "trained-model"))
+
+        assert captured["remove_unused_columns"] is False
+        assert str(captured["eval_strategy"]) == "IntervalStrategy.EPOCH"
+        assert captured["train_called"] is True
+        assert captured["saved_model_dir"] == str(tmp_path / "trained-model")
+        assert captured["saved_processor_dir"] == str(tmp_path / "trained-model")
