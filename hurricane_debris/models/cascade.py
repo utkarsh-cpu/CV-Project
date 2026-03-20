@@ -279,7 +279,7 @@ class CascadedInference:
                 points=None, boxes=box_coords, masks=None
             )
 
-            low_res_masks, iou_pred, _ = self.sam2_model.sam_mask_decoder(
+            decoder_out = self.sam2_model.sam_mask_decoder(
                 image_embeddings=image_embed,
                 image_pe=self.sam2_model.sam_prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_emb,
@@ -287,6 +287,7 @@ class CascadedInference:
                 multimask_output=True,
                 high_res_features=high_res_feats if high_res_feats else None,
             )
+            low_res_masks, iou_pred = decoder_out[0], decoder_out[1]
 
             best_idx = iou_pred.argmax(dim=-1)
             best_mask = low_res_masks[0, best_idx]

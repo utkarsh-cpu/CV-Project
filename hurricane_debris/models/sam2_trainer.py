@@ -260,7 +260,7 @@ class SAM2Trainer:
             high_res_projected = None
 
         # Mask decoder — all prompts in one call
-        low_res_masks, iou_predictions, _ = self.model.sam_mask_decoder(
+        decoder_out = self.model.sam_mask_decoder(
             image_embeddings=image_embed_expanded,
             image_pe=self.model.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
@@ -269,6 +269,7 @@ class SAM2Trainer:
             repeat_image=False,
             high_res_features=high_res_projected,
         )
+        low_res_masks, iou_predictions = decoder_out[0], decoder_out[1]
 
         # Select best mask per prompt by predicted IoU
         # low_res_masks: [N, num_masks, H_low, W_low]
