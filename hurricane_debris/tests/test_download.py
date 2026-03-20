@@ -262,6 +262,24 @@ class TestDownloadDataset:
 
         assert (dest_dir / "rescuenet.zip").exists()
 
+    def test_uses_existing_archive_in_destination_without_redownloading(self, tmp_dir):
+        """A matching local archive should be extracted instead of re-downloaded."""
+        dest_dir = tmp_dir / "datasets"
+        archive_path = _make_zip(
+            dest_dir / "rescuenet.zip",
+            {"train/.keep": "", "val/.keep": "", "test/.keep": ""},
+        )
+
+        with patch.object(_dl, "_try_download") as mock_try_download:
+            result = download_dataset("rescuenet", dest_dir=str(dest_dir))
+
+        assert result.exists()
+        assert result == dest_dir / "rescuenet"
+        for sub in DATASET_REGISTRY["rescuenet"].expected_dirs:
+            assert (result / sub).exists()
+        mock_try_download.assert_not_called()
+        assert not archive_path.exists()
+
     def test_download_all_dispatches_to_each_dataset(self, tmp_dir):
         """--dataset all should invoke download for every registered dataset."""
         # Pre-create expected dirs to satisfy the "already exists" check

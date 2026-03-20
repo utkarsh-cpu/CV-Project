@@ -99,6 +99,11 @@ python main.py --download --dataset rescuenet --dataset-dir ./datasets --force-d
 python main.py --download --dataset rescuenet --dataset-dir ./datasets --keep-archive
 ```
 
+If a matching dataset archive such as `rescuenet.zip`, `msnet.zip`, or
+`designsafe.zip` is already present directly under `--dataset-dir`, the
+download helper reuses that local archive and extracts it instead of trying to
+download it again.
+
 > **Note:** Some datasets, especially MSNet and DesignSafe-CI, may require
 > registration or manual access approval. When automatic download is not
 > available, the CLI prints instructions for manual acquisition.
