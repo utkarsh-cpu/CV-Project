@@ -316,12 +316,12 @@ def _try_download(info: DatasetInfo, archive_path: Path) -> bool:
     return False
 
 
-def _find_existing_archive(archive_path: Path) -> Optional[Path]:
-    """Return *archive_path* when an archive already exists locally."""
+def _has_existing_archive(archive_path: Path) -> bool:
+    """Return True when an archive already exists locally."""
     if archive_path.is_file():
         logger.info("Found existing archive at %s", archive_path)
-        return archive_path
-    return None
+        return True
+    return False
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -404,17 +404,16 @@ def download_dataset(
 
     # ── Download ─────────────────────────────────────────────────────────
     archive_path = dest_root / info.archive_name
-    existing_archive = _find_existing_archive(archive_path)
-    if existing_archive is not None:
+    if _has_existing_archive(archive_path):
         logger.info(
             "Using existing archive for '%s' instead of downloading again.",
             name,
         )
-        downloaded = True
+        archive_ready = True
     else:
-        downloaded = _try_download(info, archive_path)
+        archive_ready = _try_download(info, archive_path)
 
-    if not downloaded:
+    if not archive_ready:
         _print_manual_instructions(info)
         raise RuntimeError(
             f"Automatic download for '{name}' is unavailable. "
