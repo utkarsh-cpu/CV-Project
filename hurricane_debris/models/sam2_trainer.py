@@ -147,6 +147,17 @@ class SAM2Trainer:
         """
         B = images.shape[0]
 
+        # SAM2 expects 1024x1024 input; resize if needed to match the
+        # prompt encoder's fixed 64x64 embedding grid.
+        sam_img_size = getattr(self.model, "image_size", 1024)
+        if images.shape[-2] != sam_img_size or images.shape[-1] != sam_img_size:
+            images = F.interpolate(
+                images,
+                size=(sam_img_size, sam_img_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+
         with torch.no_grad():
             if self._amp_dtype:
                 with torch.autocast("cuda", dtype=self._amp_dtype):
