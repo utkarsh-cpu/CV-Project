@@ -1,0 +1,124 @@
+{
+  "args": {
+    "full_pipeline": true,
+    "train_florence": false,
+    "train_sam2": false,
+    "evaluate": false,
+    "infer": false,
+    "download": false,
+    "dataset_dir": "./datasets/rescuenet",
+    "dataset": "rescuenet",
+    "florence_dir": "./models/florence2_debris",
+    "sam2_dir": "./models/sam2_debris",
+    "sam2_checkpoint": "./checkpoints/sam2_hiera_large.pt",
+    "image": null,
+    "output_json": null,
+    "output_geojson": null,
+    "metrics_dir": "./outputs/metrics",
+    "cross_dataset": false,
+    "strict_eval_model": false,
+    "epochs_florence": 10,
+    "epochs_sam2": 20,
+    "lr_florence": 5e-05,
+    "lr_sam2": 1e-05,
+    "batch_size": 4,
+    "image_size": 768,
+    "device": "auto",
+    "log_file": "./logs/training.log",
+    "seed": 42,
+    "force_download": false,
+    "keep_archive": false
+  },
+  "config": {
+    "data": {
+      "dataset_root": "./datasets/rescuenet",
+      "image_size": 768,
+      "image_mean": [
+        0.485,
+        0.456,
+        0.406
+      ],
+      "image_std": [
+        0.229,
+        0.224,
+        0.225
+      ],
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "split_seed": 42,
+      "batch_size": 4,
+      "num_workers": 4,
+      "pin_memory": true,
+      "augment_train": true,
+      "random_crop_scale": [
+        0.8,
+        1.0
+      ],
+      "color_jitter_p": 0.3,
+      "gauss_noise_p": 0.2,
+      "num_classes": 7
+    },
+    "florence2": {
+      "model_id": "microsoft/Florence-2-base-ft",
+      "lora_r": 16,
+      "lora_alpha": 32,
+      "lora_dropout": 0.1,
+      "lora_target_modules": [
+        "q_proj",
+        "v_proj",
+        "k_proj",
+        "o_proj"
+      ],
+      "num_epochs": 10,
+      "learning_rate": 5e-05,
+      "weight_decay": 0.01,
+      "warmup_ratio": 0.1,
+      "gradient_accumulation_steps": 4,
+      "max_new_tokens": 1024,
+      "num_beams": 3,
+      "early_stopping_patience": 3,
+      "output_dir": "./models/florence2_debris"
+    },
+    "sam2": {
+      "checkpoint_path": "./checkpoints/sam2_hiera_large.pt",
+      "model_cfg": "sam2_hiera_l.yaml",
+      "freeze_image_encoder": true,
+      "train_prompt_encoder": true,
+      "train_mask_decoder": true,
+      "num_epochs": 20,
+      "learning_rate": 1e-05,
+      "weight_decay": 0.01,
+      "batch_size": 2,
+      "multimask_output": true,
+      "bce_weight": 1.0,
+      "dice_weight": 1.0,
+      "early_stopping_patience": 5,
+      "output_dir": "./models/sam2_debris"
+    },
+    "evaluation": {
+      "iou_thresholds": [
+        0.5,
+        0.55,
+        0.6,
+        0.65,
+        0.7,
+        0.75,
+        0.8,
+        0.85,
+        0.9,
+        0.95
+      ],
+      "f1_threshold": 0.5,
+      "num_classes": 7,
+      "train_dataset": "rescuenet",
+      "test_datasets": [
+        "designsafe",
+        "msnet"
+      ]
+    },
+    "device": "auto",
+    "seed": 42,
+    "log_file": "./logs/training.log"
+  }
+}
