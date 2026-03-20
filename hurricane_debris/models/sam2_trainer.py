@@ -241,6 +241,7 @@ class SAM2Trainer:
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=self.cfg.multimask_output,
+            repeat_image=False,
             high_res_features=high_res_expanded,
         )
 
