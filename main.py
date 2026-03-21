@@ -54,7 +54,7 @@ def parse_args():
     mode.add_argument("--download", action="store_true", help="Download dataset(s) to --dataset-dir")
 
     # Paths
-    parser.add_argument("--dataset-dir", default="./datasets/rescuenet", help="Dataset root")
+    parser.add_argument("--dataset-dir", default="./datasets", help="Dataset root or dataset parent directory")
     parser.add_argument(
         "--dataset",
         default="rescuenet",
@@ -237,9 +237,10 @@ def _build_predictor(args, config: ExperimentConfig):
         return OraclePredictor()
 
 
-def _resolve_dataset_dir(dataset_dir: str, dataset_name: str, cross_dataset: bool) -> str:
+def _resolve_dataset_dir(dataset_dir: str, dataset_name: str, cross_dataset: bool = False) -> str:
     base = Path(dataset_dir)
-    if not cross_dataset:
+
+    if dataset_name == "all":
         return str(base)
 
     if base.name.lower() == dataset_name.lower():
@@ -253,11 +254,12 @@ def _resolve_dataset_dir(dataset_dir: str, dataset_name: str, cross_dataset: boo
     if candidate.exists():
         return str(candidate)
 
-    logger.warning(
-        "Could not auto-resolve directory for dataset '%s'; using %s",
-        dataset_name,
-        base,
-    )
+    if cross_dataset:
+        logger.warning(
+            "Could not auto-resolve directory for dataset '%s'; using %s",
+            dataset_name,
+            base,
+        )
     return str(base)
 
 
@@ -280,10 +282,16 @@ def _save_run_artifacts(config: ExperimentConfig, args):
 
 def load_dataset(args, config: ExperimentConfig, split: str):
     """Load the appropriate dataset based on CLI args."""
+    dataset_root = _resolve_dataset_dir(
+        args.dataset_dir,
+        args.dataset,
+        getattr(args, "cross_dataset", False),
+    )
+
     if args.dataset == "rescuenet":
         from hurricane_debris.data.rescuenet import RescueNetDataset
         return RescueNetDataset(
-            root_dir=args.dataset_dir,
+            root_dir=dataset_root,
             split=split,
             config=config.data,
             task="combined",
@@ -291,7 +299,7 @@ def load_dataset(args, config: ExperimentConfig, split: str):
     elif args.dataset == "msnet":
         from hurricane_debris.data.msnet import MSNetDataset
         return MSNetDataset(
-            root_dir=args.dataset_dir,
+            root_dir=dataset_root,
             split=split,
             config=config.data,
             task="combined",
@@ -299,14 +307,14 @@ def load_dataset(args, config: ExperimentConfig, split: str):
     elif args.dataset == "designsafe":
         from hurricane_debris.data.designsafe import DesignSafeDataset
         return DesignSafeDataset(
-            root_dir=args.dataset_dir,
+            root_dir=dataset_root,
             split=split,
             config=config.data,
         )
     else:
         from hurricane_debris.data.base_dataset import DebrisDataset
         return DebrisDataset(
-            root_dir=args.dataset_dir,
+            root_dir=dataset_root,
             split=split,
             config=config.data,
             task="combined",
@@ -442,9 +450,6 @@ def evaluate(args, config: ExperimentConfig):
         logger.info("Evaluating dataset: %s", dataset_name)
         ds_args = argparse.Namespace(**vars(args))
         ds_args.dataset = dataset_name
-        ds_args.dataset_dir = _resolve_dataset_dir(
-            args.dataset_dir, dataset_name, args.cross_dataset
-        )
         evaluator = Evaluator(config=config.evaluation)
         test_ds = load_dataset(ds_args, config, "test")
 
@@ -574,7 +579,7 @@ Usage:
   python main.py --infer --image img.jpg              # Cascaded inference
 
 Options:
-  --dataset-dir PATH       Dataset root (default: ./datasets/rescuenet)
+    --dataset-dir PATH       Dataset root or parent dir (default: ./datasets)
   --dataset NAME           rescuenet | msnet | designsafe | coco | all
   --epochs-florence N      Florence-2 epochs (default: 10)
   --epochs-sam2 N          SAM2 epochs (default: 20)

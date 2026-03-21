@@ -85,3 +85,15 @@ def test_evaluate_writes_metrics_files(monkeypatch, tmp_path):
     payload = json.loads((metrics_dir / "metrics_rescuenet.json").read_text())
     assert "f1" in payload
     assert "ap50" in payload
+
+
+def test_resolve_dataset_dir_uses_sibling_dataset_folder(tmp_path):
+    datasets_root = tmp_path / "datasets"
+    rescuenet_root = datasets_root / "rescuenet"
+    msnet_root = datasets_root / "msnet"
+    rescuenet_root.mkdir(parents=True)
+    msnet_root.mkdir(parents=True)
+
+    resolved = main._resolve_dataset_dir(str(rescuenet_root), "msnet")
+
+    assert resolved == str(msnet_root)
